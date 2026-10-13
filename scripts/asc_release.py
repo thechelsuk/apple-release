@@ -80,6 +80,9 @@ def release_notes(message):
     # A merged PR's first line is "Merge pull request #.."; the PR title follows.
     if lines and lines[0].lower().startswith("merge pull request"):
         lines = lines[1:]
+    # Drop git trailers such as Signed-off-by and Co-authored-by.
+    lines = [l for l in lines if not re.match(
+        r"^\s*(signed-off-by|co-authored-by|reviewed-by|acked-by):", l, re.IGNORECASE)]
     text = "\n".join(lines)
     text = re.sub(r"\[release\]", "", text, flags=re.IGNORECASE)
     text = re.sub(r"[ \t]+\n", "\n", text).strip()
