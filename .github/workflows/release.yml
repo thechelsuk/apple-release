@@ -1,0 +1,162 @@
+# Reusable App Store release workflow.
+#
+# Called from each app repo on push to main when the commit message contains
+# "[Release]". It:
+#   1. works out the next version (YYYYMM.N) from tags and the date
+#   2. checks it against App Store Connect and creates the App Store version,
+#      with What's New = the commit message minus "[Release]"
+#   3. writes MARKETING_VERSION into the project, commits, tags vX.Y.Z and
+#      creates a GitHub release; the tag starts the Xcode Cloud build
+#   4. waits for the build to process, attaches it to the App Store version
+#      and sets the TestFlight "What to Test" text
+# You then press "Submit for Review" in App Store Connect.
+
+name: App Store Release
+
+on:
+  workflow_call:
+    inputs:
+      bundle-id:
+        description: App bundle ID, e.g. TheChelsUK.Mltply
+        required: true
+        type: string
+      project:
+        description: Path to the .xcodeproj, e.g. Mltply.xcodeproj
+        required: true
+        type: string
+      platforms:
+        description: App Store Connect platforms, space separated (IOS, MAC_OS)
+        default: IOS
+        type: string
+      min-version:
+        description: Lowest version to release
+        default: "202701.1"
+        type: string
+      wait-minutes:
+        description: How long to wait for Xcode Cloud to upload the build
+        default: 90
+        type: number
+      tools-ref:
+        description: Branch or tag of thechelsuk/apple-release to use
+        default: main
+        type: string
+    secrets:
+      ASC_KEY_ID:
+        required: true
+      ASC_ISSUER_ID:
+        required: true
+      ASC_PRIVATE_KEY:
+        required: true
+
+concurrency:
+  group: app-store-release-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Version, tag and prepare App Store Connect
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      app_id: ${{ steps.asc.outputs.app_id }}
+      version_ids: ${{ steps.asc.outputs.version_ids }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/checkout@v4
+        with:
+          repository: thechelsuk/apple-release
+          ref: ${{ inputs.tools-ref }}
+          path: .apple-release
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install --quiet "pyjwt[crypto]"
+
+      - name: Release notes from commit message
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          python .apple-release/scripts/asc_release.py notes > "$RUNNER_TEMP/notes.txt"
+          echo "What's New:"; cat "$RUNNER_TEMP/notes.txt"
+
+      - name: Next version
+        id: version
+        run: python .apple-release/scripts/asc_release.py next-version --floor "${{ inputs.min-version }}"
+
+      - name: Check and prepare App Store Connect
+        id: asc
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: |
+          python .apple-release/scripts/asc_release.py prepare \
+            --version "${{ steps.version.outputs.version }}" \
+            --bundle-id "${{ inputs.bundle-id }}" \
+            --platforms "${{ inputs.platforms }}" \
+            --notes-file "$RUNNER_TEMP/notes.txt"
+
+      - name: Set version, commit and tag
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PROJECT: ${{ inputs.project }}
+        run: |
+          sed -i -E "s/MARKETING_VERSION = [^;]+;/MARKETING_VERSION = $VERSION;/g" "$PROJECT/project.pbxproj"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$PROJECT/project.pbxproj"
+          # No [skip ci] here: Xcode Cloud honours it and would skip the tag build.
+          git diff --cached --quiet || git commit -m "Set version $VERSION"
+          git tag -a "v$VERSION" -m "Release $VERSION"
+          git push origin HEAD:${{ github.ref_name }}
+          git push origin "v$VERSION"
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: gh release create "v$VERSION" --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.txt"
+
+  attach:
+    name: Attach Xcode Cloud build
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: thechelsuk/apple-release
+          ref: ${{ inputs.tools-ref }}
+          path: .apple-release
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - run: pip install --quiet "pyjwt[crypto]"
+
+      - name: Notes
+        env:
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: python .apple-release/scripts/asc_release.py notes > "$RUNNER_TEMP/notes.txt"
+
+      - name: Wait for build and attach
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_PRIVATE_KEY: ${{ secrets.ASC_PRIVATE_KEY }}
+        run: |
+          python .apple-release/scripts/asc_release.py attach \
+            --app-id "${{ needs.release.outputs.app_id }}" \
+            --version-ids "${{ needs.release.outputs.version_ids }}" \
+            --version "${{ needs.release.outputs.version }}" \
+            --platforms "${{ inputs.platforms }}" \
+            --minutes "${{ inputs.wait-minutes }}" \
+            --notes-file "$RUNNER_TEMP/notes.txt"
