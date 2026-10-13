@@ -115,8 +115,8 @@ jobs:
           # No [skip ci] here: Xcode Cloud honours it and would skip the tag build.
           git diff --cached --quiet || git commit -m "Set version $VERSION"
           git tag -a "v$VERSION" -m "Release $VERSION"
-          git push origin HEAD:${{ github.ref_name }}
-          git push origin "v$VERSION"
+          # One atomic push so the commit and tag land together or not at all.
+          git push --atomic origin HEAD:${{ github.ref_name }} "v$VERSION"
 
       - name: GitHub release
         env:
