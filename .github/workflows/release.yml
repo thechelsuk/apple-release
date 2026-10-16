@@ -9,6 +9,8 @@
 #      creates a GitHub release; the tag starts the Xcode Cloud build
 #   4. waits for the build to process, attaches it to the App Store version
 #      and sets the TestFlight "What to Test" text
+#   5. if DEVNULL_SSH_KEY is passed, announces the release on dev-null.sh
+#      with a link to the App Store
 # You then press "Submit for Review" in App Store Connect.
 
 name: App Store Release
@@ -47,6 +49,9 @@ on:
         required: true
       ASC_PRIVATE_KEY:
         required: true
+      DEVNULL_SSH_KEY:
+        description: Ed25519 signing key for dev-null.sh; announcing is skipped without it
+        required: false
 
 concurrency:
   group: app-store-release-${{ github.repository }}
@@ -61,6 +66,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       app_id: ${{ steps.asc.outputs.app_id }}
+      app_name: ${{ steps.asc.outputs.app_name }}
       version_ids: ${{ steps.asc.outputs.version_ids }}
     steps:
       - uses: actions/checkout@v4
@@ -160,3 +166,20 @@ jobs:
             --platforms "${{ inputs.platforms }}" \
             --minutes "${{ inputs.wait-minutes }}" \
             --notes-file "$RUNNER_TEMP/notes.txt"
+
+  announce:
+    name: Announce on dev-null.sh
+    needs: [release, attach]
+    runs-on: ubuntu-latest
+    permissions: {}
+    env:
+      DEVNULL_SSH_KEY: ${{ secrets.DEVNULL_SSH_KEY }}
+    steps:
+      - uses: nunomaduro/dev-null.sh/.github/actions/commit@production
+        if: env.DEVNULL_SSH_KEY != ''
+        with:
+          body: >-
+            New version ${{ needs.release.outputs.version }} of
+            ${{ needs.release.outputs.app_name }} coming soon.
+            https://apps.apple.com/app/id${{ needs.release.outputs.app_id }}
+          ssh-key: ${{ secrets.DEVNULL_SSH_KEY }}

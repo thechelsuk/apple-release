@@ -123,7 +123,7 @@ def find_app(bundle_id):
     apps = asc("GET", "/v1/apps", params={"filter[bundleId]": bundle_id})["data"]
     if not apps:
         fail(f"No App Store Connect app with bundle ID {bundle_id}")
-    return apps[0]["id"]
+    return apps[0]["id"], apps[0]["attributes"]["name"]
 
 
 def state_of(v):
@@ -241,12 +241,13 @@ def main():
         notes = open(a.notes_file).read().strip()
         platforms = a.platforms.split()
         if a.cmd == "prepare":
-            app_id = find_app(a.bundle_id)
+            app_id, app_name = find_app(a.bundle_id)
             # Check every platform before changing any, so a bad version fails fast.
             for p in platforms:
                 prepare(app_id, a.version, p, notes, check_only=True)
             ids = [f"{p}={prepare(app_id, a.version, p, notes)}" for p in platforms]
             output("app_id", app_id)
+            output("app_name", app_name)
             output("version_ids", " ".join(ids))
         else:
             for pair in a.version_ids.split():
