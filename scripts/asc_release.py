@@ -102,7 +102,8 @@ def token():
         headers={"kid": os.environ["ASC_KEY_ID"], "typ": "JWT"})
 
 
-def asc(method, path, body=None, params=None):
+def asc(method, path, body=None, params=None, quiet=False):
+    """Calls App Store Connect. A failed call stops the job, or returns None when quiet."""
     url = API + path
     if params:
         url += "?" + urllib.parse.urlencode(params)
@@ -116,6 +117,8 @@ def asc(method, path, body=None, params=None):
             return json.loads(raw) if raw else {}
     except urllib.error.HTTPError as e:
         detail = e.read().decode(errors="replace")
+        if quiet:
+            return None
         fail(f"App Store Connect {method} {path} failed ({e.code}): {detail}")
 
 
@@ -182,6 +185,40 @@ def prepare(app_id, version, platform, notes, check_only=False):
     return vid
 
 
+def xcode_cloud_failure(app_id, version):
+    """Why Xcode Cloud won't deliver a build for tag v<version>, or None while it still might.
+
+    Only gives up once every Xcode Cloud run for the tag has finished and none succeeded,
+    so an app with one workflow per platform still waits for the platform that worked.
+    """
+    product = asc("GET", f"/v1/apps/{app_id}/ciProduct", quiet=True)
+    if not product:
+        return None
+    runs = asc("GET", f"/v1/ciProducts/{product['data']['id']}/buildRuns", quiet=True, params={
+        "include": "sourceBranchOrTag", "sort": "-number", "limit": 20})
+    if not runs:
+        return None
+    refs = {r["id"]: r["attributes"].get("name") for r in runs.get("included", [])}
+    mine = [r for r in runs["data"]
+            if refs.get(((r.get("relationships") or {}).get("sourceBranchOrTag") or {})
+                        .get("data", {}).get("id")) == f"v{version}"]
+    if not mine or any(r["attributes"].get("executionProgress") != "COMPLETE"
+                       or r["attributes"].get("completionStatus") == "SUCCEEDED" for r in mine):
+        return None
+    reasons = []
+    for run in mine:
+        actions = asc("GET", f"/v1/ciBuildRuns/{run['id']}/actions", quiet=True) or {"data": []}
+        for action in actions["data"]:
+            if action["attributes"].get("completionStatus") in ("SUCCEEDED", None):
+                continue
+            issues = asc("GET", f"/v1/ciBuildActions/{action['id']}/issues", quiet=True) or {"data": []}
+            errors = [" ".join(i["attributes"]["message"].split()) for i in issues["data"]
+                      if i["attributes"].get("issueType") in ("ERROR", "TEST_FAILURE")]
+            reasons.append(f"{action['attributes']['name']}: {'; '.join(errors[:3]) or action['attributes']['completionStatus']}")
+    number = ", ".join(str(r["attributes"].get("number")) for r in mine)
+    return f"Xcode Cloud build {number} for v{version} failed. " + " | ".join(reasons)
+
+
 def attach(app_id, version_id, version, platform, notes, minutes):
     deadline = time.time() + minutes * 60
     build = None
@@ -200,6 +237,11 @@ def attach(app_id, version_id, version, platform, notes, minutes):
             if state in ("FAILED", "INVALID"):
                 fail(f"Build processing {state}")
         else:
+            # Stop as soon as Xcode Cloud has failed, instead of waiting out the timeout
+            # and holding up the next release.
+            reason = xcode_cloud_failure(app_id, version)
+            if reason:
+                fail(reason)
             print(f"Waiting for Xcode Cloud to upload {version}…")
         time.sleep(60)
     if not build:

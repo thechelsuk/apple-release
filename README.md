@@ -12,7 +12,7 @@ Push to `main` with `[Release]` in the commit message:
 2. It checks the version against App Store Connect and creates the App Store version. What's New is the commit message without `[Release]`.
 3. It writes `MARKETING_VERSION`, commits, tags `vYYYYMM.N` and creates a GitHub release.
 4. The tag starts Xcode Cloud: Test → Archive → TestFlight.
-5. Actions waits for the build, attaches it to the App Store version and sets the TestFlight "What to Test" text.
+5. Actions waits for the build, attaches it to the App Store version and sets the TestFlight "What to Test" text. If the Xcode Cloud run for the tag fails, it stops straight away with Xcode Cloud's errors instead of waiting out the timeout.
 6. If the repo has a `DEVNULL_SSH_KEY` secret, it announces the release on [dev-null.sh](https://dev-null.sh) with the version and App Store link.
 7. You press **Submit for Review**.
 
