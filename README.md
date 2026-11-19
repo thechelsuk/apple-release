@@ -9,7 +9,7 @@ Push to `main` with `[Release]` in the commit message:
 ```
 
 1. GitHub Actions works out the next version (`YYYYMM.N`, e.g. `202701.1`, `202701.2`, `202702.1`).
-2. It checks the version against App Store Connect and creates the App Store version. What's New is the commit message without `[Release]`.
+2. It checks the version against App Store Connect and creates the App Store version. What's New is the commit message without `[Release]`. A second `[Release]` waits for the first's run to finish, and stops before tagging if the last version is still waiting to be submitted with its build attached (or is in review): submit that one first.
 3. It writes `MARKETING_VERSION`, commits, tags `vYYYYMM.N` and creates a GitHub release.
 4. The tag starts Xcode Cloud: Test → Archive → TestFlight.
 5. Actions waits for the build, attaches it to the App Store version and sets the TestFlight "What to Test" text. If the Xcode Cloud run for the tag fails, it stops straight away with Xcode Cloud's errors instead of waiting out the timeout.

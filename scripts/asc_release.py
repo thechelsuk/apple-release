@@ -161,6 +161,13 @@ def prepare(app_id, version, platform, notes, check_only=False):
         if s in BLOCKING:
             fail(f"Version {vs} is {s}. Finish or cancel it in App Store Connect first.")
         if s in EDITABLE:
+            # A version still being prepared that already has a build is an earlier release that hasn't been
+            # submitted yet. Renaming it would take that release over, so stop before changing anything. (A
+            # rejected version keeps its build too, but a new release replacing it is the fix, so it carries on.)
+            build = s == "PREPARE_FOR_SUBMISSION" and asc("GET", f"/v1/appStoreVersions/{v['id']}/build").get("data")
+            if build:
+                fail(f"Version {vs} is waiting in App Store Connect with build {build['attributes']['version']} "
+                     f"attached. Submit it (or remove its build) before releasing {version}.")
             editable = v
             continue
         # Apple compares number by number, so "202611" beats "2027.1.1".
